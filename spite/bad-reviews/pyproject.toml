@@ -1,0 +1,17 @@
+[tool.poetry]
+name = "bad-reviews"
+version = "0.1.0"
+description = ""
+authors = ["awestcc <awest@cryptocompare.com>"]
+readme = "README.md"
+packages = [{include = "bad_reviews"}]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+openai = "^0.27.8"
+black = "^23.3.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
