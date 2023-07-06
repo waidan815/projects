@@ -8,6 +8,12 @@ packages = [{include = "route_project"}]
 
 [tool.poetry.dependencies]
 python = "^3.11"
+google-cloud-storage = "^2.10.0"
+google-cloud-bigquery = "^3.11.3"
+asyncio = "^3.4.3"
+aiohttp = "^3.8.4"
+pandas = "^2.0.3"
+pyarrow = "^12.0.1"
 
 
 [build-system]
