@@ -30,8 +30,6 @@ then you can `python main.py` inside that shell to run the script
 
 
 
-
-
 ### Design Decisions
 - Authentication: GCP provides lots of methods for authentication, it would have been much better to 
   use a service account, as you have more flexibility over roles/ security etc. However, I couldn't do that so
@@ -53,6 +51,7 @@ Simple things:
     - tests
     - much much more error handling
     - retry functionality / cool-off
+    - as df is only one row, don't need to push it all to bq everytime, can concat and push resulting once
 
 More complex
     - refactored script so that it didn't bother saving blob to text file, but did everything in memory. 
