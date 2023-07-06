@@ -13,7 +13,7 @@ from google.cloud import bigquery
 
 os.environ[
     "GOOGLE_APPLICATION_CREDENTIALS"
-] = "/home/awestcc/Documents/projects/projects/route_stuff/route-project/route-project/src/autonomous-bit-391913-5ed29af63398.json"
+] = "/home/awestcc/Documents/projects/projects/autonomous-bit-391913-5ed29af63398.json"
 
 
 def get_account_key(account_name: str) -> str:
@@ -28,17 +28,13 @@ def get_account_key(account_name: str) -> str:
     return key
 
 
-def hash_dict(input_dict):
-    # Convert the dict to a string with sorted keys
+def hash_dict(input_dict: dict) -> str:
+    """Function to hash some input, so as to provide a unique identifier later"""
+
     input_str = json.dumps(input_dict, sort_keys=True)
 
-    # Create a hash object
     hash_object = hashlib.sha256()
-
-    # Update the hash object with the bytes of the string
     hash_object.update(input_str.encode())
-
-    # Get the hexadecimal representation of the hash
     hash_hex = hash_object.hexdigest()
 
     return hash_hex
@@ -129,6 +125,9 @@ async def make_api_call(session: aiohttp.ClientSession, frames: []) -> pd.DataFr
 
 
 async def push_to_bigquery(client: bigquery.Client, data: pd.DataFrame, table_id: str):
+    """Given a client, some data and a table name, will attempt to create a table within a dataset
+    if one isn't found. If one is found, will push data to it"""
+
     dataset_id = "bigquerytest-264314.Release46_CandidateTest"
     tables = list(client.list_tables("bigquerytest-264314.Release46_CandidateTest"))
 
@@ -165,11 +164,13 @@ async def push_to_bigquery(client: bigquery.Client, data: pd.DataFrame, table_id
 async def process_frame(
     session: aiohttp.ClientSession, client: bigquery.Client, frame: list, table_id: str
 ):
+    """Helper function to maintain synchronous nature of pulling data from api and pushing to bq"""
     df_to_be_pushed = await make_api_call(session=session, frames=frame)
     await push_to_bigquery(client=client, data=df_to_be_pushed, table_id=table_id)
 
 
 async def main(array_of_frames: list):
+    """Main point of entry to the script. Initializes the session, creates tasks and gathers them all into one future."""
     client = bigquery.Client(project="bigquerytest-264314")
 
     headers = {
