@@ -1,63 +1,68 @@
-"""main point of execution."""
+"""Main point of execution."""
 
 import os
+
 from google.cloud import storage
 
-import os
-from google.cloud import storage
+import first_task.getting_buckets
+import first_task.calling_api
+import first_task.helpful_functions
+import first_task.pushing_to_bq
 
 
 os.environ[
     "GOOGLE_APPLICATION_CREDENTIALS"
-] = "/home/awestcc/Documents/projects/projects/route_stuff/route-project/route-project/src/autonomous-bit-391913-5ed29af63398.json"
-
-# Now you can use the storage client
-storage_client = storage.Client(project="bigquerytest-264314")
-
-# And so on...
+] = "/home/awestcc/Documents/projects/projects/autonomous-bit-391913-5ed29af63398.json"
 
 
-def list_blobs(bucket_name):
-    """Lists all the blobs in the bucket."""
-    storage_client = storage.Client(project="bigquerytest-264314")
-    blobs = storage_client.list_blobs(bucket_name)
-    blob_names = []
-    for blob in blobs:
-        blob_names.append(blob.name)
-
-    return blob_names
-
-
-def download_blob(bucket_name, source_blob_name, destination_file_name):
-    """Downloads a blob from the bucket."""
+def buckets():
     storage_client = storage.Client(project="bigquerytest-264314")
 
-    bucket = storage_client.bucket(bucket_name)
-    blob = bucket.blob(source_blob_name)
-    blob.download_to_filename(destination_file_name)
-
-    # print(f"Blob {source_blob_name} downloaded to {destination_file_name}.")
-
-
-def main(bucket_name, local_dir):
-    # List all files in the bucket
-    blobs = list_blobs(bucket_name)
-
-    os.makedirs(
-        local_dir,
-        exist_ok=True,
+    getting_bucket_data(
+        bucket_name="routedata_r46_schedules",
+        local_dir="/home/awestcc/Documents/projects/projects/route_stuff/route-project/route-project/results/pt 1",
+        storage_client=storage_client,
     )
 
-    # Download all files to a local directory
-    for blob_name in blobs:
-        if blob_name.startswith("pt 1"):
-            source_blob_name = blob_name
-            destination_file_name = os.path.join(local_dir, blob_name)
 
-            download_blob(bucket_name, source_blob_name, destination_file_name)
+async def process_frame(
+    session: aiohttp.ClientSession, client: bigquery.Client, frame: list, table_id: str
+):
+    """Helper function to maintain synchronous nature of pulling data from api and pushing to bq"""
+    df_to_be_pushed = await make_api_call(session=session, frames=frame)
+    await push_to_bigquery(client=client, data=df_to_be_pushed, table_id=table_id)
 
 
-main(
-    bucket_name="routedata_r46_schedules",
-    local_dir="/home/awestcc/Documents/projects/projects/route_stuff/route-project/route-project/results/pt 1",
+async def main(array_of_frames: list):
+    """Main point of entry to the script. Initializes the session, creates tasks and gathers them all into one future."""
+    client = bigquery.Client(project="bigquerytest-264314")
+
+    headers = {
+        "Authorization": make_authorization_header(
+            password=get_account_key(account_name="password")
+        ),
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "X-Api-Key": get_account_key(account_name="X-Api-Key"),
+    }
+
+    async with aiohttp.ClientSession(headers=headers) as session:
+        tasks = []
+        for frame in array_of_frames:
+            task = asyncio.create_task(
+                process_frame(
+                    session=session, client=client, frame=frame, table_id="task1_table"
+                )
+            )
+            tasks.append(task)
+
+        await asyncio.gather(*tasks)
+
+
+asyncio.run(
+    main(
+        array_of_frames=get_inputs(
+            "/home/awestcc/Documents/projects/projects/route_stuff/route-project/route-project/results/pt 1"
+        )
+    )
 )
