@@ -7,7 +7,7 @@ import pandas as pd
 import hashlib
 import pyarrow
 import datetime
-
+import time
 
 from google.cloud import bigquery
 
@@ -112,49 +112,24 @@ async def make_custom_api_call(
     # unique_identifier = hash_dict(body)
 
     base_url = "https://uat-routeapi.mediatel.co.uk/rest/process/custom"
+    time.sleep(1)
 
-    async with session.post(url=base_url, json=body) as response:
-        if response.status == 200:
-            data = await response.json()
-            return data
+    for _ in range(3):
+        try:
+            async with session.post(url=base_url, json=body) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    data["datefrom"], data["dateuntil"] = datetime_from, datetime_until
+                    return data
 
-            # df = pd.json_normalize(data)
-            # df["UID"] = unique_identifier
+                else:
+                    time.sleep(10)
+                    print("sleeping")
+                    print(await response.text())
 
-            # df.rename(
-            #     columns={
-            #         "figures.impacts": "impacts",
-            #         "figures.impacts_pedestrian": "impacts_pedestrian",
-            #         "figures.impacts_vehicular": "impacts_vehicular",
-            #         "figures.reach": "reach",
-            #         "figures.average_frequency": "average_frequency",
-            #         "figures.rag_status": "rag_status",
-            #         "metrics.total_frames": "total_frames",
-            #         "metrics.total_actual_contacts": "total_actual_contacts",
-            #         "metrics.total_actual_respondents": "total_actual_respondents",
-            #     },
-            #     inplace=True,
-            # )
-            # to_be_floats = ["impacts", "reach", "average_frequency"]
-            # df[to_be_floats] = df[to_be_floats].astype(float)
-            # return df[
-            #     [
-            #         "UID",
-            #         "target_month",
-            #         "demographic",
-            #         "granular_audience",
-            #         "impacts",
-            #         "reach",
-            #         "average_frequency",
-            #         "rag_status",
-            #         "total_frames",
-            #         "total_actual_contacts",
-            #         "total_actual_respondents",
-            #     ]
-            # ]
-
-        else:
-            print(await response.text())
+        except asyncio.TimeoutError:
+            await asyncio.sleep(5)
+            print("Request to", base_url, "timed out")
 
 
 def get_data():
@@ -168,9 +143,6 @@ def get_data():
         for line in lines:
             frames.append(int(line.strip()))
     return frames
-
-
-frames = get_data()
 
 
 def get_dates(start_date, end_date):
@@ -214,10 +186,50 @@ def split_into_chunks(arr, max_chunk_size):
     return chunks
 
 
-# Usage example:
+def push_to_bigquery(client: bigquery.Client, data: pd.DataFrame, table_id: str):
+    """Given a client, some data and a table name, will attempt to create a table within a dataset
+    if one isn't found. If one is found, will push data to it"""
+
+    dataset_id = "bigquerytest-264314.Release46_CandidateTest"
+    tables = list(client.list_tables("bigquerytest-264314.Release46_CandidateTest"))
+
+    schema = [
+        bigquery.SchemaField("demographic", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("granular_audience", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("target_month", "INTEGER", mode="REQUIRED"),
+        bigquery.SchemaField("frame_id", "INTEGER", mode="REQUIRED"),
+        bigquery.SchemaField("datetimefrom", "DATETIME", mode="REQUIRED"),
+        bigquery.SchemaField("datetimeuntil", "DATETIME", mode="REQUIRED"),
+        bigquery.SchemaField("population", "FLOAT", mode="REQUIRED"),
+        bigquery.SchemaField("impacts", "FLOAT", mode="REQUIRED"),
+        bigquery.SchemaField("impacts_pedestrian", "FLOAT", mode="REQUIRED"),
+        bigquery.SchemaField("impacts_vehicular", "FLOAT", mode="REQUIRED"),
+        bigquery.SchemaField("rag_status", "STRING", mode="REQUIRED"),
+    ]
+
+    full_table_id = f"{dataset_id}.{table_id}"
+
+    if table_id not in [table.table_id for table in tables]:
+        # Create a new table
+        table = bigquery.Table(full_table_id, schema=schema)
+        table = client.create_table(table)
+        print(
+            "Created table {}.{}.{}".format(
+                table.project, table.dataset_id, table.table_id
+            )
+        )
+    job_config = bigquery.LoadJobConfig()
+    job_config.schema = schema
+    job_config.source_format = bigquery.SourceFormat.PARQUET
+    job = client.load_table_from_dataframe(data, full_table_id, job_config=job_config)
+    job.result()  # Wait for the job to complete
 
 
 async def main(frames):
+    client = bigquery.Client(project="bigquerytest-264314")
+
+    list_of_dataframes = []
+
     headers = {
         "Authorization": make_authorization_header(
             password=get_account_key(account_name="password")
@@ -226,29 +238,89 @@ async def main(frames):
         "Content-Type": "application/json",
         "X-Api-Key": get_account_key(account_name="X-Api-Key"),
     }
-    start_date = datetime.datetime(2022, 8, 1)
-    end_date = datetime.datetime(2022, 8, 2)
 
-    async with aiohttp.ClientSession(headers=headers) as session:
-        chunks = split_into_chunks(frames, 100)
+    timeout = aiohttp.ClientTimeout(total=600)
+    start_date = datetime.datetime(2022, 8, 1, 0, 0, 0)
+    end_date = datetime.datetime(2022, 8, 8, 0, 0, 0)
 
-        first_10 = chunks[0][:10]
-        print(first_10)
+    async with aiohttp.ClientSession(headers=headers, timeout=timeout) as session:
+        chunks = split_into_chunks(frames, 10000)
 
-        for date_from, date_until in get_dates(
-            start_date=start_date, end_date=end_date
-        ):
-            res = await make_custom_api_call(
-                session=session,
-                frames=first_10,
-                datetime_from=date_from,
-                datetime_until=date_until,
+        for chunk in chunks:
+            tasks = []
+            for date_from, date_until in get_dates(
+                start_date=start_date, end_date=end_date
+            ):
+                task = asyncio.create_task(
+                    make_custom_api_call(
+                        session=session,
+                        frames=chunk,
+                        datetime_from=date_from,
+                        datetime_until=date_until,
+                    )
+                )
+                tasks.append(task)
+
+            responses = await asyncio.gather(*tasks)
+
+            dataframes = []
+
+            for json in responses:
+                if "results" in json and isinstance(json["results"], list):
+                    for result in json["results"]:
+                        # Only consider 'grouping' results
+                        if result["description"] == "grouping":
+                            result["datetimefrom"] = json["datefrom"]
+                            result["datetimeuntil"] = json["dateuntil"]
+
+                            df = pd.json_normalize(result)  # flatten 'grouping' dict
+                            dataframes.append(df)
+
+            chunk_df = pd.concat(dataframes)
+            chunk_df.rename(
+                columns={
+                    "figures.population": "population",
+                    "figures.impacts": "impacts",
+                    "figures.impacts_pedestrian": "impacts_pedestrian",
+                    "figures.impacts_vehicular": "impacts_vehicular",
+                    "figures.rag_status": "rag_status",
+                },
+                inplace=True,
             )
+            to_be_floats = [
+                "population",
+                "impacts",
+                "impacts_pedestrian",
+                "impacts_vehicular",
+            ]
+            to_be_ints = ["frame_id", "target_month"]
+            chunk_df[to_be_ints] = chunk_df[to_be_ints].astype(int)
+            chunk_df[to_be_floats] = chunk_df[to_be_floats].astype(float)
+            chunk_df["datetimefrom"] = pd.to_datetime(chunk_df["datetimefrom"])
+            chunk_df["datetimeuntil"] = pd.to_datetime(chunk_df["datetimeuntil"])
 
-            print(res)
-            print(len(res))
+            chunk_df = chunk_df[
+                [
+                    "demographic",
+                    "granular_audience",
+                    "target_month",
+                    "frame_id",
+                    "datetimefrom",
+                    "datetimeuntil",
+                    "population",
+                    "impacts",
+                    "impacts_pedestrian",
+                    "impacts_vehicular",
+                    "rag_status",
+                ]
+            ]
+            chunk_df.to_csv("lookatmc.csv")
+            print(chunk_df.dtypes)
 
-            break
+            push_to_bigquery(client=client, data=chunk_df, table_id="task2_table")
+
+
+frames = get_data()
 
 
 asyncio.run(main(frames=frames))

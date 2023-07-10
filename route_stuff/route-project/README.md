@@ -28,7 +28,25 @@ machine (GCLI creds, api keys, auth logins etc)
 `poetry shell` to create a VM
 then you can `python main.py` inside that shell to run the script
 
+### Task 2
+- This is a much more involved task, as it involves lots more calls. For every frame (~ 14,000), for every 15-min interval
+  within a week, we need to call the API. Can call with an array of lots of frames, and then group by frame. So, we'll get a
+  separate dictionary for each frame, for every 15 min interval within the week. 
+- So, need to make 672 ((60mins is one hour *  24 hours in a day * 7 days in a week) / 15 minute intervals) calls to the API. 
+- Although, the grouping only supports 10,000 frames maximum, so will need to chunk the array up into suitable chunks. 
+- Then, the design is as follows:
+  - for each chunk, call the api 672 times. 
+  - ideally we'd store the output of that as some sort of compressed (i.e. parquet) file locally. 
+  - then upload that to google buckets
+  - then transfer across to bigquery. 
 
+  The reason being that we want to make our process as fault-tolerant as possible, and if something goes wrong it's not the easiest 
+  thing in the world to figure out where we left off in bigquery. Although counter-point is logging. 
+
+However, time is limited here. So instead we'll just push straight to BQ. 
+I also don't know about the rate limits, so have just gone with some delays
+- as opposed to semaphores (which don't really work for this use case), exp back-off & retry, doing something with headers etc or 
+  3rd party libraries like aiolimiter. 
 
 ### Design Decisions
 - Authentication: GCP provides lots of methods for authentication, it would have been much better to 
