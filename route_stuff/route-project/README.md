@@ -6,11 +6,15 @@
 
     main - point of entry
 
-    src/first task/
+    src/
+      first task/
         calling api = all the api functions
         getting buckets = all the functions to get data from GCP buckets
         helpful functions = a couple of functions to test things / delete unwanted files
         pushing to bigquery = functions to help push to bq
+
+      second_task/
+        api_call.py
 
     tests/  = empty tests folder
 
@@ -28,68 +32,51 @@ machine (GCLI creds, api keys, auth logins etc)
 `poetry shell` to create a VM
 then you can `python main.py` inside that shell to run the script
 
+### Task 1
+- Authenticates using google CLI. 
+- This grabs some data from buckets, uses it to call the api and stores the results in a bigquery table. 
+- Api calls are written such that they are executed concurrently. 
+- Hashing. Looking into it further, BigQuery doesn't implement primary keys in the same way that other DBs (i.e.
+  postgres) does, so hashing the input wasn't strictly necessary here.
+
 ### Task 2
-- This is a much more involved task, as it involves lots more calls. For every frame (~ 14,000), for every 15-min interval
+- This is a much more involved task, as we have to make lots more calls. For every frame (~ 14,000), for every 15-min interval
   within a week, we need to call the API. Can call with an array of lots of frames, and then group by frame. So, we'll get a
   separate dictionary for each frame, for every 15 min interval within the week. 
 - So, need to make 672 ((60mins is one hour *  24 hours in a day * 7 days in a week) / 15 minute intervals) calls to the API. 
 - Although, the grouping only supports 10,000 frames maximum, so will need to chunk the array up into suitable chunks. 
-- Then, the design is as follows:
-  - for each chunk, call the api 672 times. 
-  - ideally we'd store the output of that as some sort of compressed (i.e. parquet) file locally. 
+
+- I had a dive into best practices for BQ, ideally, we'd have some sort of pipeline where:
+  - for each chunk, call the api ~672 times. 
+  - store the output of that as some sort of compressed (i.e. parquet) file locally. 
   - then upload that to google buckets
   - then transfer across to bigquery. 
+  - if necessary, clean up local storage and buckets
 
-  The reason being that we want to make our process as fault-tolerant as possible, and if something goes wrong it's not the easiest 
-  thing in the world to figure out where we left off in bigquery. Although counter-point is logging. 
+- However, as upload access to buckets is restricted here, and implementation time is limited, I'm skipping the intermediary stages.
+  So, my pipeline is much simpler:
+  - for each chunk, call the api.
+  - push the output of that api call to bigquery. 
+  - it is a slight upgrade to task 1 in that it aggregates a large number of calls into one pandas dataframe, then batch pushes to BigQuery. 
 
-However, time is limited here. So instead we'll just push straight to BQ. 
-I also don't know about the rate limits, so have just gone with some delays
-- as opposed to semaphores (which don't really work for this use case), exp back-off & retry, doing something with headers etc or 
-  3rd party libraries like aiolimiter. 
-
-### Design Decisions
-- Authentication: GCP provides lots of methods for authentication, it would have been much better to 
-  use a service account, as you have more flexibility over roles/ security etc. However, I couldn't do that so
-  had to login through GCP CLI and get a json credentials file, which I then passed as an env variable.
-- Asynchronous nature: As far as I could see, there were 3 bottlenecks to the process, which were the 3 I/O tasks.
-  Although I wasn't sure how much stress this would put on the route API, I decided to write some async code that
-  if it was waiting for a task to complete, could move onto the next task in the meantime. As such, each pull from 
-  api and push to bq could happen concurrently (more or less.) 
-- Hashing the input: Not much thought went into this one, I just wanted to have a unique column for each row that
-  was pushed to bq. Hashing the data would allow me to check easily if it's already in the db. Maybe more something 
-  for further down the line, and I appreciate that that wouldn't allow me to push multiple calls into the same table.
-- Using pandas: Again not much thought. Went with a library I know to transform data such that it fit the schema. 
-- Schema: Kept the things I thought could be useful. Would definitely spend more time on this part if I had to do this again
-
-### If I had More Time...
-Would definitely have made many changes.
-Simple things:
-    - logging
-    - tests
-    - much much more error handling
-    - retry functionality / cool-off
-    - as df is only one row, don't need to push it all to bq everytime, can concat and push resulting once
-
-More complex
-    - refactored script so that it didn't bother saving blob to text file, but did everything in memory. 
-    - thought more about the bq table structure, created a PK, included date of check, linked another table etc
-    - split up larger functions into subfunctions. Makes it easier to test. E.g. api call & transformation. 
-### Background
-Route provides audience data (people who pass and see) for OOH assets and campaigns. The data for which is used by the advertising industry to buy/sell space on the OOH advertising, they do this both at an individual spot level, somewhat akin to a TV spot, on digital screens and at a campaign level. A campaign for OOH is defined by a group of assets (frames) that are made available over a particular time period. These campaigns are typically run against the Route API to get information on the reach - the number of individuals seeing the campaign, the frequency - the number of time on average the campaign is seen and the impacts - the total number of times a campaign is seen.
-
-### Constraints
-
-(putting constraints here so I can refer to them)
-Limitations
-To ensure the Route API accords with rules provided by Route and the Benchmarking Reach algorithm and to ensure optimum performance is maintained, the following limitations are in place:
-
-The Route API will not calculate reach based figures (reach, cover and average frequency) where schedules have a gap of a week or more (i.e. a week-on/week-off schedule) based on Mon–Sun as whole weeks.
-Grouping by frame_id cannot be used for more than 10,000 frames in a single call
-Grouping cannot be used for more than 100,000 frames in a single call.
-Where campaign schedules contain duplicate frames the dates/dayparts cannot overlap.
-The demographic array is limited to allowing a maximum of 30 demographics in a single call.
-The maximum number of resulting items/nodes cannot exceed 20,000 e.g. for a call with 10,000 frames using "grouping" by frame_id results in 10,000 output items. If applying more than 2 demographics at a time this will exceed 20,000 output nodes.
+  
+- As such, the process is not very fault-tolerant. If something goes wrong, it's not the simplest thing to pick up from where the 
+  program left off. 
+- This is somewhat countered by the logging & error handling but not completely. 
+- Talking of fault-tolerant, I wasn't able to discern the actual rate limits on the UAT api, so I've used a 3rd party library to limit
+  the number of calls per second. This probably makes the program slower than it needs to be, but thought I'd err on the side of caution.
 
 
+### Automating fully. 
+- Following up on our talk on automation last week, I had a look into how to take this program to the next level. 
 
+- As these two tasks do 2 different (slightly) things, it would make sense to have them running as different services. As the data is going 
+  from Buckets to BigQuery, it makes sense to stay within GCP. From looking into this a bit, there would be 3 options to take this to the 
+  next step, all of which would require containerization of the program. (not hard to do, just would have had to re-write env variables, file
+  paths, api keys etc.)
+
+  1 - Google Compute Engine, essentially just a VM where you pay for size of machine provisioned
+  2 - Google Cloud Run, runs application in stateless containers, where you pay for exact usage / compute needed
+  3 - Google K8s, but would probably be overkill for simple application like this. 
+
+  Google Cloud Run makes the most sense. 

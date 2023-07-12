@@ -1,0 +1,4 @@
+2023-07-11 22:52:35,540 - ERROR - Starting the Program!
+2023-07-11 23:15:30,137 - ERROR - Starting the Program!
+2023-07-11 23:35:53,176 - ERROR - Starting the Program!
+2023-07-12 00:03:44,777 - ERROR - Starting the Program!
